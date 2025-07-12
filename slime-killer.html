@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Forest Walking Simulator with Rock Throwing</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+            text-shadow: 1px 1px 1px black;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: white;
+        }
+        #crosshair::before {
+            width: 2px;
+            height: 20px;
+            left: 9px;
+            top: 0;
+        }
+        #crosshair::after {
+            width: 20px;
+            height: 2px;
+            left: 0;
+            top: 9px;
+        }
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+            text-shadow: 1px 1px 1px black;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">WASD to move | Mouse to look around | Space to jump | Left-click to throw rocks | E to pick up rocks</div>
+    <div id="crosshair"></div>
+    <div id="hud">Rocks: 0</div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/PointerLockControls.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+        scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
+
+        // Camera
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.y = 1.6;
+
+        // Renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Controls
+        const controls = new THREE.PointerLockControls(camera, document.body);
+        
+        // Click to lock controls
+        document.addEventListener('click', function() {
+            if (!controls.isLocked) {
+                controls.lock();
+            }
+        }, false);
+
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(500, 500);
+        const groundMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x3a5f0b,
+            roughness: 1.0,
+            metalness: 0.0
+        });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Trees
+        const treeGeometry = new THREE.CylinderGeometry(0.3, 0.5, 5, 8);
+        const treeTopGeometry = new THREE.ConeGeometry(1.5, 4, 8);
+        const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x5e2c04 });
+        const treeTopMaterial = new THREE.MeshStandardMaterial({ color: 0x2d5e1a });
+
+        function createTree(x, z) {
+            const tree = new THREE.Group();
+            
+            const trunk = new THREE.Mesh(treeGeometry, treeMaterial);
+            trunk.position.y = 2.5;
+            trunk.castShadow = true;
+            trunk.receiveShadow = true;
+            tree.add(trunk);
+            
+            const top = new THREE.Mesh(treeTopGeometry, treeTopMaterial);
+            top.position.y = 5;
+            top.castShadow = true;
+            top.receiveShadow = true;
+            tree.add(top);
+            
+            tree.position.set(x, 0, z);
+            tree.castShadow = true;
+            tree.receiveShadow = true;
+            
+            return tree;
+        }
+
+        // Create a forest
+        const trees = [];
+        for (let i = 0; i < 200; i++) {
+            const x = Math.random() * 400 - 200;
+            const z = Math.random() * 400 - 200;
+            if (Math.sqrt(x*x + z*z) > 20) { // Don't put trees too close to start
+                const tree = createTree(x, z);
+                scene.add(tree);
+                trees.push(tree);
+            }
+        }
+
+        // Rocks
+        const rockGeometry = new THREE.DodecahedronGeometry(0.5, 0);
+        const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x777777 });
+        
+        // Array to store all rock objects
+        const rocks = [];
+        const rockVelocities = [];
+        const rockInHand = null;
+        let rockCount = 0;
+        const hud = document.getElementById('hud');
+
+        function createRock(x, z, isPickable = true) {
+            const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+            rock.position.set(x, 0.5, z);
+            rock.castShadow = true;
+            rock.receiveShadow = true;
+            rock.userData.isPickable = isPickable;
+            scene.add(rock);
+            rocks.push(rock);
+            rockVelocities.push(new THREE.Vector3(0, 0, 0));
+            return rock;
+        }
+
+        // Initialize rocks in the scene
+        for (let i = 0; i < 50; i++) {
+            const x = Math.random() * 400 - 200;
+            const z = Math.random() * 400 - 200;
+            if (Math.sqrt(x*x + z*z) > 20) {
+                createRock(x, z);
+            }
+        }
+
+        // Grass
+        const grassGeometry = new THREE.PlaneGeometry(1, 1);
+        const grassMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x4CAF50,
+            side: THREE.DoubleSide,
+            transparent: true,
+            alphaTest: 0.5
+        });
+        const grassTexture = new THREE.TextureLoader().load('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH4AkEEjIZdT1M1QAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAJklEQVQ4y2NgGAWjYBSMglEwCkbBKBgFowAUMP7//58BFQx3AADXpQh5jQjQJQAAAABJRU5ErkJggg==');
+        grassMaterial.alphaMap = grassTexture;
+
+        for (let i = 0; i < 1000; i++) {
+            const grass = new THREE.Mesh(grassGeometry, grassMaterial);
+            grass.position.set(
+                Math.random() * 400 - 200,
+                0,
+                Math.random() * 400 - 200
+            );
+            grass.rotation.y = Math.random() * Math.PI;
+            grass.rotation.x = -Math.PI / 2;
+            grass.scale.setScalar(0.5 + Math.random() * 0.5);
+            scene.add(grass);
+        }
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(50, 200, 100);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 500;
+        directionalLight.shadow.camera.left = -100;
+        directionalLight.shadow.camera.right = 100;
+        directionalLight.shadow.camera.top = 100;
+        directionalLight.shadow.camera.bottom = -100;
+        scene.add(directionalLight);
+
+        // Movement variables
+        const moveSpeed = 0.2;
+        const jumpHeight = 0.5;
+        let velocityY = 0;
+        let isJumping = false;
+        const gravity = 0.02;
+
+        // Key states
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false,
+            space: false,
+            e: false,
+            mouseLeft: false
+        };
+
+        // Event listeners for keyboard
+        document.addEventListener('keydown', (event) => {
+            switch (event.code) {
+                case 'KeyW': keys.w = true; break;
+                case 'KeyA': keys.a = true; break;
+                case 'KeyS': keys.s = true; break;
+                case 'KeyD': keys.d = true; break;
+                case 'Space': 
+                    if (!isJumping) {
+                        velocityY = jumpHeight;
+                        isJumping = true;
+                    }
+                    keys.space = true; 
+                    break;
+                case 'KeyE': keys.e = true; break;
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            switch (event.code) {
+                case 'KeyW': keys.w = false; break;
+                case 'KeyA': keys.a = false; break;
+                case 'KeyS': keys.s = false; break;
+                case 'KeyD': keys.d = false; break;
+                case 'Space': keys.space = false; break;
+                case 'KeyE': keys.e = false; break;
+            }
+        });
+
+        // Mouse events
+        document.addEventListener('mousedown', (event) => {
+            if (event.button === 0) { // Left click
+                keys.mouseLeft = true;
+            }
+        });
+
+        document.addEventListener('mouseup', (event) => {
+            if (event.button === 0) {
+                keys.mouseLeft = false;
+            }
+        });
+
+        // Rock in hand
+        let heldRock = null;
+        // Adjusted position - further back (z = -1.2) and lower (y = -0.5)
+        let rockInHandPosition = new THREE.Vector3(0.3, -0.5, -1.2);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Raycaster for picking up rocks
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // Physics for thrown rocks
+        function updateRockPhysics(rock, velocity, index) {
+            // Apply gravity
+            velocity.y -= 0.02;
+            
+            // Update position
+            rock.position.x += velocity.x;
+            rock.position.y += velocity.y;
+            rock.position.z += velocity.z;
+            
+            // Ground collision
+            if (rock.position.y < 0.5) {
+                rock.position.y = 0.5;
+                velocity.set(0, 0, 0);
+            }
+            
+            // Tree collision (simple sphere collision)
+            trees.forEach(tree => {
+                const distance = rock.position.distanceTo(tree.position);
+                if (distance < 1.5) {
+                    // Simple bounce effect
+                    const direction = new THREE.Vector3().subVectors(rock.position, tree.position).normalize();
+                    velocity.add(direction.multiplyScalar(0.1));
+                }
+            });
+            
+            // Rock rotation for visual effect
+            rock.rotation.x += velocity.length() * 0.1;
+            rock.rotation.y += velocity.length() * 0.1;
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Movement
+            if (controls.isLocked) {
+                // Standard movement
+                if (keys.w) {
+                    controls.moveForward(moveSpeed);
+                }
+                if (keys.s) {
+                    controls.moveForward(-moveSpeed);
+                }
+                if (keys.a) {
+                    controls.moveRight(-moveSpeed);
+                }
+                if (keys.d) {
+                    controls.moveRight(moveSpeed);
+                }
+
+                // Jumping and gravity
+                velocityY -= gravity;
+                controls.getObject().position.y += velocityY;
+
+                // Ground collision
+                if (controls.getObject().position.y < 1.6) {
+                    controls.getObject().position.y = 1.6;
+                    velocityY = 0;
+                    isJumping = false;
+                }
+
+                // Pick up rock with E key
+                if (keys.e && !heldRock) {
+                    // Set up raycaster
+                    mouse.set(0, 0); // Center of screen
+                    raycaster.setFromCamera(mouse, camera);
+                    
+                    // Check for intersections with rocks
+                    const intersects = raycaster.intersectObjects(rocks);
+                    
+                    if (intersects.length > 0) {
+                        const rock = intersects[0].object;
+                        if (rock.userData.isPickable) {
+                            // Remove from rocks array
+                            const index = rocks.indexOf(rock);
+                            if (index !== -1) {
+                                rocks.splice(index, 1);
+                                rockVelocities.splice(index, 1);
+                            }
+                            
+                            // Attach to camera
+                            heldRock = rock;
+                            rockCount++;
+                            hud.textContent = `Rocks: ${rockCount}`;
+                        }
+                    }
+                }
+
+                // Throw rock with left mouse button
+                if (keys.mouseLeft && heldRock) {
+                    // Calculate throw direction (camera forward)
+                    const direction = new THREE.Vector3();
+                    camera.getWorldDirection(direction);
+                    direction.multiplyScalar(0.5); // Throw strength
+                    
+                    // Add the rock back to the scene at camera position
+                    heldRock.position.copy(camera.position);
+                    scene.add(heldRock);
+                    
+                    // Add to rocks array with velocity
+                    rocks.push(heldRock);
+                    rockVelocities.push(direction);
+                    
+                    // Reset held rock
+                    heldRock = null;
+                    rockCount--;
+                    hud.textContent = `Rocks: ${rockCount}`;
+                    
+                    // Reset mouse state
+                    keys.mouseLeft = false;
+                }
+
+                // Update held rock position
+                if (heldRock) {
+                    heldRock.position.copy(rockInHandPosition).applyMatrix4(camera.matrixWorld);
+                    heldRock.rotation.x += 0.1;
+                    heldRock.rotation.y += 0.1;
+                }
+            }
+
+            // Update physics for all rocks
+            for (let i = 0; i < rocks.length; i++) {
+                updateRockPhysics(rocks[i], rockVelocities[i], i);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
